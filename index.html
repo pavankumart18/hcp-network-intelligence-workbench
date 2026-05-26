@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HCP Network Intelligence Workbench</title>
+  <link rel="stylesheet" href="assets/css/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="topbar-left">
+        <a href="#upload" class="brand" id="brand-home" style="text-decoration:none;color:inherit">
+          <div class="brand-mark">
+            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <circle cx="10" cy="16" r="6" stroke="currentColor" stroke-width="2" />
+              <circle cx="22" cy="16" r="6" stroke="currentColor" stroke-width="2" />
+              <circle cx="16" cy="9" r="2.5" fill="currentColor" />
+              <circle cx="16" cy="23" r="2.5" fill="currentColor" />
+            </svg>
+          </div>
+          <div class="brand-text">
+            <div class="brand-title">HCP Network Intelligence</div>
+            <div class="brand-sub">Workbench · Secondary Stroke Prevention Launch</div>
+          </div>
+        </a>
+      </div>
+      <div class="topbar-right">
+        <div class="user-chip">
+          <div class="user-avatar">DS</div>
+          <div class="user-meta">
+            <div class="user-name">Data Strategy Lead</div>
+            <div class="user-role">Health Systems · Bayer</div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-label">Workflow</div>
+          <nav id="nav-steps" class="nav-list"></nav>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Reference</div>
+          <nav class="nav-list">
+            <a href="#network" class="nav-link nav-link-secondary">Network graph</a>
+            <a href="#twobytwo" class="nav-link nav-link-secondary">2×2 archetype maps</a>
+            <a href="#assistant" class="nav-link nav-link-secondary">Network assistant</a>
+          </nav>
+        </div>
+        <div class="sidebar-footer">
+          <div class="sidebar-footer-title">Hero IDN</div>
+          <div class="sidebar-footer-body">Great Lakes Health Network<br/><span class="muted">16 facilities · 3 stroke centers · 1 AMC</span></div>
+        </div>
+      </aside>
+
+      <main id="screen" class="screen-host"></main>
+    </div>
+
+    <div id="drawer" class="drawer" role="dialog" aria-hidden="true">
+      <div class="drawer-scrim" data-drawer-close></div>
+      <aside class="drawer-panel" id="drawer-panel"></aside>
+    </div>
+
+    <div id="toast" class="toast" aria-live="polite"></div>
+  </div>
+
+  <script src="assets/data/demo_data.js"></script>
+  <script src="assets/js/app.js"></script>
+  <script src="assets/js/screens.js"></script>
+  <script src="assets/js/network.js"></script>
+  <script src="assets/js/twobytwo.js"></script>
+  <script src="assets/js/assistant.js"></script>
+  <script src="assets/js/detail.js"></script>
+  <script src="assets/js/boot.js"></script>
+</body>
+</html>
