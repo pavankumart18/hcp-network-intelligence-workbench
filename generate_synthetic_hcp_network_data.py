@@ -1545,56 +1545,114 @@ def profile_quality(rows: list[dict], schema_type: str) -> dict:
         "missing_by_key": {k: v for k, v in missing_by_col.items() if v > 0},
         "issues": [],
     }
+
+    first = rows[0] if rows else {}
+
+    def examples(pred, focus_cols, limit=4, sort_key=None, reverse=False):
+        """Return up to `limit` native-dict example rows that demonstrate an issue."""
+        matched = [r for r in rows if pred(r)]
+        if sort_key is not None:
+            matched = sorted(matched, key=sort_key, reverse=reverse)
+        id_pref = [
+            "full_name", "hco_name", "author_name", "crm_account_name",
+            "source_hcp_id", "source_hco_id", "crm_hcp_id", "publication_id",
+            "hcp_npi", "npi",
+        ]
+        cols = []
+        for c in id_pref:
+            if c in first and c not in focus_cols and c not in cols:
+                cols.append(c)
+            if len(cols) >= 2:
+                break
+        for c in focus_cols:
+            if c in first and c not in cols:
+                cols.append(c)
+        cols = cols[:6]
+        recs = []
+        for r in matched[:limit]:
+            recs.append({c: ("" if r.get(c) is None else r.get(c)) for c in cols})
+        return {"columns": cols, "rows": recs}
+
     if schema_type == "HCP master":
         dup_npi = int(df["npi"].duplicated(keep=False).fillna(False).sum())
         out["duplicate_id_count"] = dup_npi
+        seen, dup_set = set(), set()
+        for r in rows:
+            v = r.get("npi")
+            if v:
+                (dup_set if v in seen else seen).add(v)
         out["issues"] = [
-            {"label": "Missing NPI", "severity": "amber", "count": int(df["npi"].isna().sum())},
-            {"label": "Duplicate NPI rows", "severity": "amber", "count": dup_npi},
-            {"label": "Name variants for hero HCPs", "severity": "amber", "count": 12},
-            {"label": "Specialty too broad (e.g. Neurology)", "severity": "amber", "count": int((df["primary_specialty"] == "Neurology").sum())},
+            {"label": "Missing NPI", "severity": "amber", "count": int(df["npi"].isna().sum()),
+             "example": examples(lambda r: not r.get("npi"), ["npi", "primary_specialty", "city", "state"])},
+            {"label": "Duplicate NPI rows", "severity": "amber", "count": dup_npi,
+             "example": examples(lambda r: r.get("npi") in dup_set, ["npi", "primary_specialty", "source_last_updated"], sort_key=lambda r: str(r.get("npi")))},
+            {"label": "Name variants for hero HCPs", "severity": "amber", "count": 12,
+             "example": examples(lambda r: str(r.get("source_hcp_id", "")).endswith("-D"), ["full_name", "npi", "primary_specialty"], sort_key=lambda r: len(str(r.get("full_name", ""))), reverse=True)},
+            {"label": "Specialty too broad (e.g. Neurology)", "severity": "amber", "count": int((df["primary_specialty"] == "Neurology").sum()),
+             "example": examples(lambda r: r.get("primary_specialty") == "Neurology", ["primary_specialty", "secondary_specialty", "city"])},
         ]
         out["score"] = 78
     elif schema_type == "HCO hierarchy":
         out["issues"] = [
-            {"label": "Missing stroke center level", "severity": "amber", "count": int(df["stroke_center_level"].isna().sum())},
-            {"label": "Parent IDN string mismatch", "severity": "amber", "count": int(df["parent_idn_name"].fillna("").str.contains("legacy").sum())},
-            {"label": "Hospital aliases / acronyms", "severity": "green", "count": int(df["hco_alias"].fillna("").apply(lambda x: len(str(x)) <= 6).sum())},
+            {"label": "Missing stroke center level", "severity": "amber", "count": int(df["stroke_center_level"].isna().sum()),
+             "example": examples(lambda r: not r.get("stroke_center_level"), ["hco_type", "stroke_center_level", "bed_count"])},
+            {"label": "Parent IDN string mismatch", "severity": "amber", "count": int(df["parent_idn_name"].fillna("").str.contains("legacy").sum()),
+             "example": examples(lambda r: "legacy" in str(r.get("parent_idn_name") or ""), ["parent_idn_name", "hco_type"])},
+            {"label": "Hospital aliases / acronyms", "severity": "green", "count": int(df["hco_alias"].fillna("").apply(lambda x: len(str(x)) <= 6).sum()),
+             "example": examples(lambda r: len(str(r.get("hco_alias") or "")) <= 6, ["hco_alias", "hco_type"])},
         ]
         out["score"] = 84
     elif schema_type == "Affiliations":
         # multiple per HCP / conflicting primary
         prim_counts = df[df["primary_affiliation_flag"] == "Y"].groupby("source_hcp_id").size()
         conflicting = int((prim_counts > 1).sum())
+        conflict_ids = set(prim_counts[prim_counts > 1].index)
         out["issues"] = [
-            {"label": "Conflicting primary affiliation", "severity": "red", "count": conflicting},
-            {"label": "Stale affiliation (end_date set)", "severity": "amber", "count": int(df["end_date"].notna().sum())},
-            {"label": "Missing title", "severity": "amber", "count": int(df["title"].isna().sum())},
-            {"label": "Missing department", "severity": "amber", "count": int(df["department"].isna().sum())},
+            {"label": "Conflicting primary affiliation", "severity": "red", "count": conflicting,
+             "example": examples(lambda r: r.get("source_hcp_id") in conflict_ids and r.get("primary_affiliation_flag") == "Y", ["hco_name", "primary_affiliation_flag", "title"], sort_key=lambda r: str(r.get("source_hcp_id")))},
+            {"label": "Stale affiliation (end_date set)", "severity": "amber", "count": int(df["end_date"].notna().sum()),
+             "example": examples(lambda r: r.get("end_date"), ["hco_name", "end_date", "affiliation_type"])},
+            {"label": "Missing title", "severity": "amber", "count": int(df["title"].isna().sum()),
+             "example": examples(lambda r: not r.get("title"), ["hco_name", "title", "department"])},
+            {"label": "Missing department", "severity": "amber", "count": int(df["department"].isna().sum()),
+             "example": examples(lambda r: not r.get("department"), ["hco_name", "department", "title"])},
         ]
         out["score"] = 72
     elif schema_type == "Claims":
         out["issues"] = [
-            {"label": "Median claims lag (days)", "severity": "amber", "count": int(df["data_lag_days"].median())},
-            {"label": "Missing HCO attribution", "severity": "amber", "count": int(df["source_hco_id"].isna().sum())},
-            {"label": "Billing vs treating ambiguity", "severity": "amber", "count": int((df["billing_vs_treating_role"] != "Treating").sum())},
-            {"label": "Low counts suppressed", "severity": "green", "count": int(df["ischemic_stroke_patient_count"].isna().sum())},
+            {"label": "Median claims lag (days)", "severity": "amber", "count": int(df["data_lag_days"].median()),
+             "example": examples(lambda r: True, ["data_lag_days", "period_end", "ischemic_stroke_patient_count"], sort_key=lambda r: r.get("data_lag_days") or 0, reverse=True)},
+            {"label": "Missing HCO attribution", "severity": "amber", "count": int(df["source_hco_id"].isna().sum()),
+             "example": examples(lambda r: not r.get("source_hco_id"), ["source_hco_id", "ischemic_stroke_patient_count", "tia_patient_count"])},
+            {"label": "Billing vs treating ambiguity", "severity": "amber", "count": int((df["billing_vs_treating_role"] != "Treating").sum()),
+             "example": examples(lambda r: r.get("billing_vs_treating_role") != "Treating", ["billing_vs_treating_role", "ischemic_stroke_patient_count"])},
+            {"label": "Low counts suppressed", "severity": "green", "count": int(df["ischemic_stroke_patient_count"].isna().sum()),
+             "example": examples(lambda r: r.get("ischemic_stroke_patient_count") is None, ["ischemic_stroke_patient_count", "tia_patient_count", "billing_vs_treating_role"])},
         ]
         out["score"] = 76
     elif schema_type == "Publications":
         out["issues"] = [
-            {"label": "Author without NPI", "severity": "red", "count": int(df["matched_npi"].isna().sum())},
-            {"label": "Missing topic tags", "severity": "amber", "count": int(df["topic_tags"].isna().sum())},
-            {"label": "Trial role variants need normalization", "severity": "amber", "count": int(df["trial_role"].notna().sum())},
-            {"label": "Messy institution strings", "severity": "amber", "count": int(df["author_affiliation_text"].fillna("").apply(lambda x: "Dept" in str(x)).sum())},
+            {"label": "Author without NPI", "severity": "red", "count": int(df["matched_npi"].isna().sum()),
+             "example": examples(lambda r: not r.get("matched_npi"), ["matched_npi", "topic_tags", "publication_year"])},
+            {"label": "Missing topic tags", "severity": "amber", "count": int(df["topic_tags"].isna().sum()),
+             "example": examples(lambda r: not r.get("topic_tags"), ["topic_tags", "title"])},
+            {"label": "Trial role variants need normalization", "severity": "amber", "count": int(df["trial_role"].notna().sum()),
+             "example": examples(lambda r: r.get("trial_role"), ["trial_role", "trial_id"])},
+            {"label": "Messy institution strings", "severity": "amber", "count": int(df["author_affiliation_text"].fillna("").apply(lambda x: "Dept" in str(x)).sum()),
+             "example": examples(lambda r: "Dept" in str(r.get("author_affiliation_text") or ""), ["author_affiliation_text"])},
         ]
         out["score"] = 68
     elif schema_type == "CRM":
+        stale_cutoff = (date(2026, 5, 1) - timedelta(days=180)).strftime("%Y-%m-%d")
         out["issues"] = [
-            {"label": "Missing NPI on CRM contact", "severity": "red", "count": int(df["npi"].isna().sum())},
-            {"label": "Duplicate CRM contacts", "severity": "amber", "count": int(df["crm_account_id"].eq("ACCTDUP").sum())},
-            {"label": "Stale (>180d) last interaction", "severity": "amber", "count": int(pd.to_datetime(df["last_msl_interaction_date"], errors="coerce").lt(pd.Timestamp(date(2026, 5, 1) - timedelta(days=180))).sum())},
-            {"label": "Account-level (no HCP) engagement", "severity": "amber", "count": int((df["engagement_sentiment"] == "Unknown").sum())},
+            {"label": "Missing NPI on CRM contact", "severity": "red", "count": int(df["npi"].isna().sum()),
+             "example": examples(lambda r: not r.get("npi"), ["npi", "crm_account_name", "engagement_sentiment"])},
+            {"label": "Duplicate CRM contacts", "severity": "amber", "count": int(df["crm_account_id"].eq("ACCTDUP").sum()),
+             "example": examples(lambda r: r.get("crm_account_id") == "ACCTDUP", ["crm_account_id", "crm_account_name", "last_msl_interaction_date"])},
+            {"label": "Stale (>180d) last interaction", "severity": "amber", "count": int(pd.to_datetime(df["last_msl_interaction_date"], errors="coerce").lt(pd.Timestamp(date(2026, 5, 1) - timedelta(days=180))).sum()),
+             "example": examples(lambda r: str(r.get("last_msl_interaction_date") or "") < stale_cutoff and r.get("last_msl_interaction_date"), ["last_msl_interaction_date", "msl_interaction_count_12m"], sort_key=lambda r: str(r.get("last_msl_interaction_date")))},
+            {"label": "Account-level (no HCP) engagement", "severity": "amber", "count": int((df["engagement_sentiment"] == "Unknown").sum()),
+             "example": examples(lambda r: r.get("engagement_sentiment") == "Unknown", ["engagement_sentiment", "content_topics_engaged"])},
         ]
         out["score"] = 70
     return out

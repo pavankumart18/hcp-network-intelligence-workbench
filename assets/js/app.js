@@ -15,6 +15,7 @@ window.App = (function () {
   const state = {
     current: 'upload',
     automapComplete: false,
+    uploadsLoaded: false,
     selectedTile: null,
     filters: {
       scenario: null,

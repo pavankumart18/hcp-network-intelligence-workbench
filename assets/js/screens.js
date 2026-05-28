@@ -37,12 +37,29 @@ window.Screens = window.Screens || {};
     'CRM': { initials: 'CR', label: 'Bayer engagement', color: '#d97706' },
   };
 
+  // Plain-language meaning + source provenance for the columns AutoMap derives
+  // (none of these exist in the raw source files — they are computed).
+  const DERIVED_COLUMNS = [
+    { col: 'launch_relevance_score', meaning: 'Overall priority for the secondary stroke prevention launch — how much this HCP matters end-to-end. Blends disease volume, scientific standing, network reach and system position.', sources: ['Claims', 'Publications', 'Affiliations', 'CRM'] },
+    { col: 'scientific_influence_score', meaning: 'Academic / evidence standing: publication output, recency, citations, co-authorship reach, and trial leadership roles.', sources: ['Publications'] },
+    { col: 'clinical_network_score', meaning: 'Reach across the shared-patient / referral network — how many other HCPs this clinician is clinically connected to.', sources: ['Claims', 'Affiliations'] },
+    { col: 'system_influence_score', meaning: 'Ability to move pathway and protocol decisions inside a health system, from leadership titles and the facility’s stroke-center tier.', sources: ['Affiliations', 'HCO hierarchy'] },
+    { col: 'bayer_relationship_strength', meaning: 'Depth of the existing Bayer relationship: MSL/rep interaction frequency and recency, advisory-board and speaker history.', sources: ['CRM'] },
+    { col: 'digital_engagement_score', meaning: 'Responsiveness to digital and content channels — email open rate, webinar attendance, and disease-topic content engagement.', sources: ['CRM'] },
+    { col: 'referral_centrality_score', meaning: 'How central the HCP is as a referral hub (inbound vs outbound referral volume and shared-patient degree).', sources: ['Claims'] },
+    { col: 'bridge_score', meaning: 'Strength as a connector routing community-care patients into comprehensive stroke centers.', sources: ['Claims', 'Affiliations', 'HCO hierarchy'] },
+    { col: 'disease_relevance_score', meaning: 'Stroke / TIA clinical focus from ischemic-stroke and TIA patient volume plus secondary-prevention follow-up activity.', sources: ['Claims'] },
+    { col: 'primary_launch_archetype', meaning: 'Launch playbook segment (e.g. Scientific KOL, Referral Hub) assigned by threshold rules over the scores above, with human-readable reason codes.', sources: ['All scores above'] },
+    { col: 'recommended_next_action', meaning: 'Suggested first engagement step and owning Bayer team, derived from the archetype and relationship gap.', sources: ['Archetype', 'CRM'] },
+  ];
+
   /* ------------------------------------------------------------------ */
   /* 1. Upload                                                           */
   /* ------------------------------------------------------------------ */
 
   Screens.upload = function (host) {
     const tiles = getData().tiles;
+    const loaded = App.state.uploadsLoaded;
     host.innerHTML = screenHeader(
       'Upload data sources',
       'Drop IQVIA-style HCP master, Definitive-style HCO hierarchy, claims/activity, publication/trial, and CRM/digital engagement extracts. The app will profile, map, and harmonize them into a launch-ready HCP network model.',
@@ -52,90 +69,196 @@ window.Screens = window.Screens || {};
         <div class="icon">↑</div>
         <h3>Drag and drop your Excel files</h3>
         <p>Or click to browse. We auto-detect IQVIA, Definitive, Affiliations, Claims, Publications, and CRM schemas.</p>
-        <div class="accepted">Accepts .xlsx · .xls · .csv · 6 synthetic files have been pre-loaded for you.</div>
+        <div class="accepted">Accepts .xlsx · .xls · .csv</div>
+        <button class="btn btn-primary mt-12" id="upload-btn">Upload data sources</button>
       </div>
       <div class="demo-note">
-        <b>Demo note.</b> Six synthetic Excel extracts have been pre-loaded. Click any tile to inspect its data-quality profile, then continue to AutoMap.
+        <b>Demo note.</b> Click <b>Upload data sources</b> to load the six synthetic extracts. Once loaded, click any source tile to inspect its data-quality profile below, then continue to AutoMap.
       </div>
-      <div class="space-between mb-12">
-        <div class="section-title" style="margin:0">Loaded sources (${tiles.length})</div>
-        <div class="text-small text-muted">Total <b data-count="${tiles.reduce((a, t) => a + t.row_count, 0)}">0</b> source rows · <b data-count="${tiles.length}">0</b> files</div>
-      </div>
-      <div class="grid grid-3 stagger" id="upload-tiles"></div>
-      <div class="row-end mt-20">
-        <button class="btn" id="add-file">+ Add another file</button>
-        <button class="btn btn-primary" id="continue-quality">Review data quality →</button>
-      </div>
+      ${loaded ? `
+        <div class="space-between mb-12">
+          <div class="section-title" style="margin:0">Loaded sources (${tiles.length})</div>
+          <div class="text-small text-muted">Total <b data-count="${tiles.reduce((a, t) => a + t.row_count, 0)}">0</b> source rows · <b data-count="${tiles.length}">0</b> files</div>
+        </div>
+        <div class="grid grid-3 stagger" id="upload-tiles"></div>
+        <div id="source-detail-panel" class="source-detail-panel hidden"></div>
+        <div class="row-end mt-20">
+          <button class="btn" id="add-file">+ Add another file</button>
+          <button class="btn btn-primary" id="continue-quality">Review data quality →</button>
+        </div>
+      ` : `
+        <div class="empty-sources" id="empty-sources">
+          <div class="empty-icon">📂</div>
+          <div class="empty-title">No sources loaded yet</div>
+          <div class="text-small text-muted">Click <b>Upload data sources</b> above to load the six synthetic extracts.</div>
+        </div>
+      `}
     `;
 
-    const tileGrid = host.querySelector('#upload-tiles');
-    tiles.forEach(t => {
-      const meta = SOURCE_ICONS[t.schema_type] || { initials: 'XX', label: t.schema_type, color: '#475569' };
-      const tile = document.createElement('div');
-      tile.className = 'file-tile lift';
-      tile.style.cursor = 'pointer';
-      tile.innerHTML = `
-        <div class="file-tile-head">
-          <div class="row">
-            <div class="file-tile-icon" style="background:${meta.color}1a;color:${meta.color}">${meta.initials}</div>
-            <div>
-              <div class="file-tile-name">${escape(t.file_name)}</div>
-              <div class="file-tile-type">${escape(meta.label)} · ${escape(t.sheet)}</div>
+    if (loaded) {
+      const tileGrid = host.querySelector('#upload-tiles');
+      tiles.forEach(t => {
+        const meta = SOURCE_ICONS[t.schema_type] || { initials: 'XX', label: t.schema_type, color: '#475569' };
+        const tile = document.createElement('div');
+        tile.className = 'file-tile lift';
+        tile.style.cursor = 'pointer';
+        tile.innerHTML = `
+          <div class="file-tile-head">
+            <div class="row">
+              <div class="file-tile-icon" style="background:${meta.color}1a;color:${meta.color}">${meta.initials}</div>
+              <div>
+                <div class="file-tile-name">${escape(t.file_name)}</div>
+                <div class="file-tile-type">${escape(meta.label)} · ${escape(t.sheet)}</div>
+              </div>
             </div>
+            <span class="pill pill-green">Detected</span>
           </div>
-          <span class="pill pill-green">Detected</span>
-        </div>
-        <div class="file-tile-stats">
-          <div><b data-count="${t.row_count}">0</b> rows</div>
-          <div><b>${t.column_count}</b> cols</div>
-          <div><b>${t.issue_count}</b> issues</div>
-        </div>
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <div class="text-small text-muted">Quality score</div>
-          ${scoreRingHTML(t.score)}
-        </div>
-      `;
-      tile.onclick = () => openQualityDrawer(t.file_name);
-      tileGrid.appendChild(tile);
-    });
+          <div class="file-tile-stats">
+            <div><b data-count="${t.row_count}">0</b> rows</div>
+            <div><b>${t.column_count}</b> cols</div>
+            <div><b>${t.issue_count}</b> issues</div>
+          </div>
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <div class="text-small text-muted">Quality score</div>
+            ${scoreRingHTML(t.score)}
+          </div>
+        `;
+        tile.onclick = () => {
+          tileGrid.querySelectorAll('.file-tile.is-selected').forEach(x => x.classList.remove('is-selected'));
+          tile.classList.add('is-selected');
+          showSourceDetailInline(host, t.file_name);
+        };
+        tileGrid.appendChild(tile);
+      });
+      animateCounts(host);
+      host.querySelector('#continue-quality').onclick = () => navigate('quality');
+      host.querySelector('#add-file').onclick = () => openUploadModal(host);
+    }
 
-    animateCounts(host);
-
-    host.querySelector('#continue-quality').onclick = () => navigate('quality');
-    host.querySelector('#upload-zone').onclick = () => simulateUpload(host);
-    host.querySelector('#add-file').onclick = () => simulateUpload(host);
+    host.querySelector('#upload-zone').onclick = () => openUploadModal(host);
   };
 
-  function simulateUpload(host) {
-    // Fake-uploader modal that walks through a realistic flow
+  // Inline (bottom) source-detail panel — full width so the sample table is readable
+  function showSourceDetailInline(host, fileName) {
+    const prof = getData().profiles[fileName];
+    const sample = prof.sample_rows || [];
+    const cols = (sample[0] && Object.keys(sample[0])) || [];
+    const panel = host.querySelector('#source-detail-panel');
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+      <div class="space-between mb-12">
+        <div>
+          <div class="card-subtitle" style="margin:0">Source profile · ${escape(prof.schema_type)}</div>
+          <div class="card-title" style="margin:2px 0 0">${escape(fileName)}</div>
+        </div>
+        <button class="btn btn-sm btn-ghost" id="close-source-detail">Close ×</button>
+      </div>
+      <div class="grid grid-4 mb-16">
+        <div class="kpi"><div class="kpi-value" data-count="${prof.row_count}">0</div><div class="kpi-label">Rows</div></div>
+        <div class="kpi"><div class="kpi-value">${prof.column_count}</div><div class="kpi-label">Columns</div></div>
+        <div class="kpi"><div class="kpi-value" style="color:${scoreColor(prof.score)}" data-count="${prof.score}">0</div><div class="kpi-label">Quality score</div></div>
+        <div class="kpi"><div class="kpi-value">${prof.issues.length}</div><div class="kpi-label">Checks</div></div>
+      </div>
+      <div class="grid grid-2" style="gap:20px;align-items:start">
+        <div>
+          <div class="section-title" style="margin-top:0">Detected issues</div>
+          <div class="text-small text-muted mb-12">Click an issue to see example rows.</div>
+          <div class="quality-issues">
+            ${prof.issues.map((i, idx) => `
+              <div class="quality-issue is-clickable" data-sidx="${idx}">
+                <div class="left"><span class="severity-dot ${i.severity}"></span>${escape(i.label)}</div>
+                <span class="row" style="gap:6px"><b>${fmt(i.count)}</b><span class="qi-chevron">›</span></span>
+              </div>
+              <div class="issue-inline-example hidden" data-sexample="${idx}"></div>
+            `).join('')}
+          </div>
+        </div>
+        <div>
+          ${Object.keys(prof.missing_by_key).length ? `
+            <div class="section-title" style="margin-top:0">Missing values by column</div>
+            <table class="table">
+              <thead><tr><th>Column</th><th style="text-align:right">Missing</th></tr></thead>
+              <tbody>
+                ${Object.entries(prof.missing_by_key).slice(0, 10).map(([k, v]) => `
+                  <tr><td class="text-mono">${escape(k)}</td><td style="text-align:right">${fmt(v)}</td></tr>
+                `).join('')}
+              </tbody>
+            </table>` : '<div class="text-muted text-small">No missing values detected.</div>'}
+        </div>
+      </div>
+      <div class="section-title">Sample rows</div>
+      <div style="overflow-x:auto">
+        <table class="table issue-example-table">
+          <thead><tr>${cols.slice(0, 10).map(c => `<th>${escape(c)}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${sample.map(row => `
+              <tr>${cols.slice(0, 10).map(c => {
+                const v = row[c];
+                const empty = v === '' || v === null || v === undefined;
+                return `<td class="${empty ? 'cell-empty' : ''}">${empty ? '—' : escape(v)}</td>`;
+              }).join('')}</tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    animateCounts(panel);
+    panel.querySelector('#close-source-detail').onclick = () => {
+      panel.classList.add('hidden');
+      host.querySelectorAll('.file-tile.is-selected').forEach(x => x.classList.remove('is-selected'));
+    };
+    panel.querySelectorAll('.quality-issue.is-clickable[data-sidx]').forEach(row => {
+      row.onclick = () => {
+        const idx = row.getAttribute('data-sidx');
+        const box = panel.querySelector(`[data-sexample="${idx}"]`);
+        const isOpen = !box.classList.contains('hidden');
+        panel.querySelectorAll('.issue-inline-example').forEach(b => { b.classList.add('hidden'); b.innerHTML = ''; });
+        panel.querySelectorAll('.quality-issue.is-active').forEach(r => r.classList.remove('is-active'));
+        if (!isOpen) {
+          box.innerHTML = issueExampleTableHTML(prof.issues[idx]);
+          box.classList.remove('hidden');
+          row.classList.add('is-active');
+        }
+      };
+    });
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // Multi-file uploader — walks through loading the six source extracts
+  function openUploadModal(host) {
+    const tiles = getData().tiles;
     const overlay = document.createElement('div');
     overlay.className = 'sim-modal';
     overlay.innerHTML = `
       <div class="sim-modal-scrim"></div>
       <div class="sim-modal-card">
         <div class="sim-modal-head">
-          <div class="sim-modal-title">Upload data source</div>
+          <div class="sim-modal-title">Upload data sources</div>
           <button class="sim-modal-close" type="button">×</button>
         </div>
         <div class="sim-modal-body">
           <div class="sim-drop" id="sim-drop">
             <div class="icon">↑</div>
-            <div><b>Drop a file here or click to browse</b></div>
-            <div class="text-small text-muted">.xlsx · .xls · .csv up to 50 MB</div>
+            <div><b>Drop your files here or click to browse</b></div>
+            <div class="text-small text-muted">6 synthetic extracts selected · .xlsx · .csv</div>
           </div>
-          <div class="sim-progress hidden" id="sim-progress">
-            <div class="sim-file"><span class="sim-file-name" id="sim-file-name">—</span><span class="sim-file-size text-muted text-small" id="sim-file-size">—</span></div>
-            <div class="progress-bar"><div class="progress-bar-fill" id="sim-bar"></div></div>
-            <div class="text-small text-muted" id="sim-stage">Uploading…</div>
-          </div>
-          <div class="sim-done hidden" id="sim-done">
-            <div class="row" style="align-items:center;gap:10px;color:var(--success);font-weight:600"><span style="font-size:22px">✓</span> Upload complete</div>
-            <div class="text-small text-muted mt-8">Detected as <b id="sim-schema">HCP master</b>. Profiling will start when you continue.</div>
+          <div class="sim-file-list hidden" id="sim-list">
+            ${tiles.map((t, i) => {
+              const meta = SOURCE_ICONS[t.schema_type] || { initials: 'XX', color: '#475569' };
+              return `
+                <div class="sim-file-row" data-i="${i}">
+                  <div class="sim-file-ic" style="background:${meta.color}1a;color:${meta.color}">${meta.initials}</div>
+                  <div class="sim-file-main">
+                    <div class="space-between"><span class="sim-file-name">${escape(t.file_name)}</span><span class="sim-file-status text-small" data-status="${i}">Queued</span></div>
+                    <div class="progress-bar sim-mini-bar"><div class="progress-bar-fill" data-bar="${i}" style="width:0%"></div></div>
+                  </div>
+                </div>`;
+            }).join('')}
           </div>
         </div>
         <div class="sim-modal-foot">
           <button class="btn" id="sim-cancel">Cancel</button>
-          <button class="btn btn-primary" id="sim-continue" disabled>Continue →</button>
+          <button class="btn btn-primary" id="sim-done" disabled>Done →</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -149,46 +272,45 @@ window.Screens = window.Screens || {};
     overlay.querySelector('.sim-modal-close').onclick = close;
     overlay.querySelector('#sim-cancel').onclick = close;
 
-    const fakeFiles = [
-      { name: 'HCO_Hierarchy_Definitive_v3.xlsx', size: '2.4 MB', schema: 'HCO hierarchy' },
-      { name: 'HCP_Master_IQVIA_Q1.xlsx',         size: '4.1 MB', schema: 'HCP master' },
-      { name: 'Claims_Stroke_TIA_24mo.csv',       size: '8.7 MB', schema: 'Claims' },
-      { name: 'Publications_Stroke_2024.xlsx',    size: '1.6 MB', schema: 'Publications' },
-    ];
-    const pick = fakeFiles[Math.floor(Math.random() * fakeFiles.length)];
-
-    overlay.querySelector('#sim-drop').onclick = () => {
+    function startUploads() {
       overlay.querySelector('#sim-drop').classList.add('hidden');
-      overlay.querySelector('#sim-progress').classList.remove('hidden');
-      overlay.querySelector('#sim-file-name').textContent = pick.name;
-      overlay.querySelector('#sim-file-size').textContent = pick.size;
-      const bar = overlay.querySelector('#sim-bar');
-      const stage = overlay.querySelector('#sim-stage');
-      const stages = [
-        { p: 25,  t: 'Uploading… 25%' },
-        { p: 55,  t: 'Uploading… 55%' },
-        { p: 82,  t: 'Uploading… 82%' },
-        { p: 100, t: 'Detecting schema…' },
-      ];
-      let i = 0;
-      const step = () => {
-        if (i >= stages.length) {
-          overlay.querySelector('#sim-progress').classList.add('hidden');
-          overlay.querySelector('#sim-done').classList.remove('hidden');
-          overlay.querySelector('#sim-schema').textContent = pick.schema;
-          overlay.querySelector('#sim-continue').disabled = false;
+      overlay.querySelector('#sim-list').classList.remove('hidden');
+      let idx = 0;
+      const next = () => {
+        if (idx >= tiles.length) {
+          overlay.querySelector('#sim-done').disabled = false;
           return;
         }
-        bar.style.width = stages[i].p + '%';
-        stage.textContent = stages[i].t;
-        i++;
-        setTimeout(step, 480);
+        const i = idx;
+        const bar = overlay.querySelector(`[data-bar="${i}"]`);
+        const status = overlay.querySelector(`[data-status="${i}"]`);
+        status.textContent = 'Uploading…';
+        status.className = 'sim-file-status text-small uploading';
+        let p = 0;
+        const tick = () => {
+          p += 22 + Math.random() * 16;
+          if (p >= 100) {
+            bar.style.width = '100%';
+            status.textContent = '✓ Detected · ' + tiles[i].schema_type;
+            status.className = 'sim-file-status text-small done';
+            idx++;
+            setTimeout(next, 150);
+            return;
+          }
+          bar.style.width = p + '%';
+          setTimeout(tick, 120);
+        };
+        tick();
       };
-      step();
-    };
-    overlay.querySelector('#sim-continue').onclick = () => {
+      next();
+    }
+
+    overlay.querySelector('#sim-drop').onclick = startUploads;
+    overlay.querySelector('#sim-done').onclick = () => {
+      App.state.uploadsLoaded = true;
       close();
-      App.toast(`${pick.name} queued — schema "${pick.schema}" detected`);
+      App.navigate('upload', { instant: true });
+      setTimeout(() => App.toast('6 sources loaded · profiling complete'), 280);
     };
   }
 
@@ -216,6 +338,7 @@ window.Screens = window.Screens || {};
         <div class="kpi"><div class="kpi-value" style="color:var(--warning)" data-count="${totalAmber}">0</div><div class="kpi-label">Amber issues</div></div>
       </div>
       <div class="grid grid-3 stagger" id="quality-tiles"></div>
+      <div id="issue-example-panel" class="issue-example-panel hidden"></div>
       <div class="row-end mt-24">
         <button class="btn" id="review-map">Review mapping</button>
         <button class="btn btn-primary" id="continue-automap">Continue to AutoMap →</button>
@@ -252,10 +375,10 @@ window.Screens = window.Screens || {};
           ${green ? `<span class="pill pill-green">${green} info</span>` : ''}
         </div>
         <div class="quality-issues">
-          ${prof.issues.slice(0, 3).map(i => `
-            <div class="quality-issue">
+          ${prof.issues.map((i, idx) => `
+            <div class="quality-issue is-clickable" data-file="${escape(t.file_name)}" data-idx="${idx}" title="Click to see example rows">
               <div class="left"><span class="severity-dot ${i.severity}"></span>${escape(i.label)}</div>
-              <b>${fmt(i.count)}</b>
+              <span class="row" style="gap:6px"><b>${fmt(i.count)}</b><span class="qi-chevron">›</span></span>
             </div>
           `).join('')}
         </div>
@@ -274,10 +397,62 @@ window.Screens = window.Screens || {};
       };
     });
 
+    // Clickable issue rows → example table below the grid
+    grid.querySelectorAll('.quality-issue.is-clickable').forEach(row => {
+      row.onclick = () => {
+        grid.querySelectorAll('.quality-issue.is-active').forEach(r => r.classList.remove('is-active'));
+        row.classList.add('is-active');
+        showIssueExamples(host, row.getAttribute('data-file'), parseInt(row.getAttribute('data-idx'), 10));
+      };
+    });
+
     animateCounts(host);
     host.querySelector('#continue-automap').onclick = () => navigate('automap');
     host.querySelector('#review-map').onclick = () => navigate('automap');
   };
+
+  function issueExampleTableHTML(issue) {
+    const ex = issue.example;
+    if (!ex || !ex.columns || !ex.rows || !ex.rows.length) {
+      return `<div class="text-muted text-small">No example rows available for this check.</div>`;
+    }
+    const head = ex.columns.map(c => `<th>${escape(c)}</th>`).join('');
+    const body = ex.rows.map(r => `<tr>${ex.columns.map(c => {
+      const v = r[c];
+      const empty = v === '' || v === null || v === undefined;
+      return `<td class="${empty ? 'cell-empty' : ''}">${empty ? '— missing —' : escape(v)}</td>`;
+    }).join('')}</tr>`).join('');
+    return `
+      <div style="overflow-x:auto">
+        <table class="table issue-example-table">
+          <thead><tr>${head}</tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function showIssueExamples(host, fileName, idx) {
+    const prof = getData().profiles[fileName];
+    const issue = prof.issues[idx];
+    const panel = host.querySelector('#issue-example-panel');
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+      <div class="space-between mb-12">
+        <div>
+          <div class="card-subtitle" style="margin:0">${escape(prof.schema_type)} · ${escape(fileName)}</div>
+          <div class="card-title" style="margin:2px 0 0"><span class="severity-dot ${issue.severity}"></span> ${escape(issue.label)} <span class="pill ${pillFor(issue.severity)}">${fmt(issue.count)} rows affected</span></div>
+        </div>
+        <button class="btn btn-sm btn-ghost" id="close-issue-panel">Close ×</button>
+      </div>
+      <div class="text-small text-muted mb-12">Example rows from the source that triggered this check:</div>
+      ${issueExampleTableHTML(issue)}
+    `;
+    panel.querySelector('#close-issue-panel').onclick = () => {
+      panel.classList.add('hidden');
+      host.querySelectorAll('.quality-issue.is-active').forEach(r => r.classList.remove('is-active'));
+    };
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 
   function openQualityDrawer(fileName) {
     const prof = getData().profiles[fileName];
@@ -300,12 +475,14 @@ window.Screens = window.Screens || {};
         </div>
         <div class="drawer-section">
           <h4>Detected issues</h4>
+          <div class="text-small text-muted mb-12">Click an issue to see example rows that triggered it.</div>
           <div class="quality-issues">
-            ${prof.issues.map(i => `
-              <div class="quality-issue">
+            ${prof.issues.map((i, idx) => `
+              <div class="quality-issue is-clickable" data-didx="${idx}">
                 <div class="left"><span class="severity-dot ${i.severity}"></span>${escape(i.label)}</div>
-                <b>${fmt(i.count)}</b>
+                <span class="row" style="gap:6px"><b>${fmt(i.count)}</b><span class="qi-chevron">›</span></span>
               </div>
+              <div class="issue-inline-example hidden" data-dexample="${idx}"></div>
             `).join('')}
           </div>
         </div>
@@ -337,6 +514,22 @@ window.Screens = window.Screens || {};
       </div>
     `);
     animateCounts(document.getElementById('drawer-panel'));
+
+    const panel = document.getElementById('drawer-panel');
+    panel.querySelectorAll('.quality-issue.is-clickable[data-didx]').forEach(row => {
+      row.onclick = () => {
+        const idx = row.getAttribute('data-didx');
+        const box = panel.querySelector(`[data-dexample="${idx}"]`);
+        const isOpen = !box.classList.contains('hidden');
+        panel.querySelectorAll('.issue-inline-example').forEach(b => { b.classList.add('hidden'); b.innerHTML = ''; });
+        panel.querySelectorAll('.quality-issue.is-active').forEach(r => r.classList.remove('is-active'));
+        if (!isOpen) {
+          box.innerHTML = issueExampleTableHTML(prof.issues[idx]);
+          box.classList.remove('hidden');
+          row.classList.add('is-active');
+        }
+      };
+    });
   }
 
   /* ------------------------------------------------------------------ */
@@ -388,6 +581,28 @@ window.Screens = window.Screens || {};
           </div>
         </div>
       </div>
+
+      <div class="card mt-16">
+        <div class="card-title">Additional derived columns AutoMap will create</div>
+        <div class="card-subtitle">These do not exist in any source file — AutoMap computes them. Below is what each means and which sources it is synthesized from.</div>
+        <div style="overflow-x:auto" class="mt-12">
+          <table class="table derived-table">
+            <thead>
+              <tr><th>Derived column</th><th>What it means (plain language)</th><th>Synthesized from</th></tr>
+            </thead>
+            <tbody>
+              ${DERIVED_COLUMNS.map(d => `
+                <tr>
+                  <td class="text-mono">${escape(d.col)}</td>
+                  <td>${escape(d.meaning)}</td>
+                  <td>${d.sources.map(s => `<span class="pill pill-grey">${escape(s)}</span>`).join(' ')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="row-end mt-16">
         <button class="btn" id="save-rules">Save rules</button>
         <button class="btn btn-primary" id="run-automap">⚡ Run AutoMap</button>
